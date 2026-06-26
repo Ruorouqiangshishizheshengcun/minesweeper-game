@@ -6,6 +6,9 @@ export const DEFAULT_CONFIG: BoardConfig = {
 
 export const CELL_SIZE = 40;
 
+export const BASE_URL = 'https://minesweeper-backend-production.up.railway.app';
+export const WS_URL = 'wss://minesweeper-backend-production.up.railway.app';
+
 export const COLORS = {
   background: '#f0f0f0',
   cell: '#b0b0b0',
