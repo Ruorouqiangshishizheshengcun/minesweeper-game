@@ -1,7 +1,14 @@
+import { io } from 'socket.io-client';
 import { initGame, handleLeftClick, handleRightClick, updateTimer, resetGame } from './game';
 import { Cell } from './types';
-import { DEFAULT_CONFIG, CELL_SIZE } from './constants';
+import { DEFAULT_CONFIG, CELL_SIZE, WS_URL } from './constants';
 import { Renderer } from './renderer';
+
+export const socket = io(WS_URL);
+
+socket.on('connect', () => {
+  console.log('已连上对战服务器');
+});
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
