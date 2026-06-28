@@ -1,38 +1,31 @@
-export const DEFAULT_CONFIG: BoardConfig = {
-  rows: 16,
-  cols: 16,
-  mines: 40,
-};
+export const ROWS = 9;
+export const COLS = 9;
+export const CELL_SIZE = 40;          // 每个格子像素大小
+export const CANVAS_WIDTH = COLS * CELL_SIZE;
+export const CANVAS_HEIGHT = ROWS * CELL_SIZE;
 
-export const CELL_SIZE = 40;
+// 单机难度预设
+export const DIFFICULTY_PRESETS = {
+  easy:   { rows: 9,  cols: 9,  mines: 10, label: '初级 9×9' },
+  medium: { rows: 16, cols: 16, mines: 40, label: '中级 16×16' },
+  hard:   { rows: 16, cols: 30, mines: 99, label: '高级 16×30' },
+} as const;
+export type DifficultyKey = keyof typeof DIFFICULTY_PRESETS;
 
-export const BASE_URL = 'https://minesweeper-backend-production.up.railway.app';
-export const WS_URL = 'wss://minesweeper-backend-production.up.railway.app/socket.io';
+// 难度参数校验边界（对战模式创建房间用）
+export const DIFF_VALID = {
+  ROWS_MIN: 5,
+  ROWS_MAX: 30,
+  COLS_MIN: 5,
+  COLS_MAX: 50,
+  SAFE_ZONE: 9,  // 首次点击 3×3 安全区需要至少 9 个非雷格
+} as const;
 
-export const COLORS = {
-  background: '#f0f0f0',
-  cell: '#b0b0b0',
-  cellRevealed: '#d1d1d1',
-  border: '#7b7b7b',
-  mine: '#333333',
-  flag: '#dc3545',
-  text: {
-    1: '#0000ff',
-    2: '#008000',
-    3: '#ff0000',
-    4: '#000080',
-    5: '#800000',
-    6: '#008080',
-    7: '#000000',
-    8: '#808080',
-  } as Record<number, string>,
-};
-
-export const FONT_SIZE = 20;
-export const FONT_WEIGHT = 'bold';
-
-export interface BoardConfig {
-  rows: number;
-  cols: number;
-  mines: number;
+// 动态计算格子尺寸，确保棋盘在视口内完整显示
+export function getDynamicCellSize(rows: number, cols: number): number {
+  const maxWidth = Math.min(window.innerWidth * 0.9, 520);
+  const maxHeight = window.innerHeight * 0.55;
+  const fromWidth = Math.floor(maxWidth / cols);
+  const fromHeight = Math.floor(maxHeight / rows);
+  return Math.max(20, Math.min(40, fromWidth, fromHeight));
 }

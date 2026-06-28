@@ -1,129 +1,196 @@
-import { Cell, CellState, BoardConfig } from './types';
-import {
-  DEFAULT_CONFIG,
-  CELL_SIZE,
-  COLORS,
-  FONT_SIZE,
-  FONT_WEIGHT,
-} from './constants';
+import { Cell, CellState } from './types';
+import { CELL_SIZE } from './constants';
+import socket from './socket';
 
-export class Renderer {
-  private ctx: CanvasRenderingContext2D;
-  canvas: HTMLCanvasElement;
-  private config: BoardConfig;
+// ---- God Mode 预留接口 ----
+// 第五阶段实现时，此处改为 true 并编写透视绘制逻辑即可
+export let godMode = false;
 
-  constructor(canvas: HTMLCanvasElement, config: BoardConfig = DEFAULT_CONFIG) {
-    this.canvas = canvas;
-    this.config = config;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get canvas context');
-    this.ctx = ctx;
+export function enableGodMode() {
+  godMode = !godMode;
+  console.log(`[GodMode] ${godMode ? 'ON' : 'OFF'}`);
+  // 重绘棋盘以立即生效
+  drawBoard();
+}
 
-    this.resizeCanvas();
+// ---- Canvas 旗帜绘制（纯矢量，跨平台一致） ----
+function drawFlag(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const s = size * 0.22;       // 旗面半宽
+  const poleX = cx - s * 0.4;  // 旗杆 X
+  const poleTop = cy - s * 1.3;
+  const poleBottom = cy + s * 1.2;
+
+  // 旗杆
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = Math.max(1.5, size * 0.04);
+  ctx.beginPath();
+  ctx.moveTo(poleX, poleTop);
+  ctx.lineTo(poleX, poleBottom);
+  ctx.stroke();
+
+  // 底座三角
+  ctx.fillStyle = '#555';
+  ctx.beginPath();
+  ctx.moveTo(poleX - s * 0.35, poleBottom);
+  ctx.lineTo(poleX + s * 0.35, poleBottom);
+  ctx.lineTo(poleX, poleBottom + s * 0.35);
+  ctx.closePath();
+  ctx.fill();
+
+  // 旗面（红色三角）
+  ctx.fillStyle = '#e63946';
+  ctx.beginPath();
+  ctx.moveTo(poleX + 0.5, poleTop + s * 0.3);
+  ctx.lineTo(poleX + s * 2, cy - s * 0.2);
+  ctx.lineTo(poleX + 0.5, cy + s * 0.7);
+  ctx.closePath();
+  ctx.fill();
+
+  // 旗面亮边
+  ctx.strokeStyle = '#ff6b6b';
+  ctx.lineWidth = Math.max(0.8, size * 0.015);
+  ctx.stroke();
+}
+
+// ---- 单个格子绘制（复用逻辑） ----
+function drawOneCell(
+  ctx: CanvasRenderingContext2D,
+  cell: Cell,
+  x: number, y: number, cs: number,
+  mySid?: string  // 当前玩家的 socket.id，用于区分己方/对手揭开的格子
+) {
+  let isOpponentCell = false;
+
+  // 底色
+  if (godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+    ctx.fillStyle = '#4a1010';
+  } else if (cell.state === CellState.Revealed) {
+    // 已揭开：根据 revealedBy 区分己方和对手
+    if (mySid && cell.revealedBy && cell.revealedBy !== mySid) {
+      ctx.fillStyle = '#f5e6d3';  // 对手揭开 → 暖米色，与灰色差异大
+      isOpponentCell = true;
+    } else {
+      ctx.fillStyle = '#e0e0e0';  // 己方揭开 → 浅灰
+    }
+  } else {
+    ctx.fillStyle = '#c0c0c0';  // 未翻开
+  }
+  ctx.fillRect(x, y, cs, cs);
+
+  // 3D 边框（未翻开时）
+  if (cell.state !== CellState.Revealed) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x, y, cs - 2, 2);
+    ctx.fillRect(x, y, 2, cs - 2);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(x, y + cs - 2, cs, 2);
+    ctx.fillRect(x + cs - 2, y, 2, cs);
   }
 
-  resizeCanvas(): void {
-    this.canvas.width = this.config.cols * CELL_SIZE;
-    this.canvas.height = this.config.rows * CELL_SIZE;
+  // 对手揭开的格子：内边框二次强化
+  if (isOpponentCell) {
+    ctx.strokeStyle = '#c9a87c';
+    ctx.lineWidth = Math.max(1, cs * 0.03);
+    ctx.strokeRect(x + 1, y + 1, cs - 2, cs - 2);
   }
 
-  clear(): void {
-    this.ctx.fillStyle = COLORS.background;
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  // 上帝模式：未翻开雷格画小圆点
+  if (godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.arc(x + cs / 2, y + cs / 2, cs * 0.12, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  drawBoard(board: Cell[][]): void {
-    this.clear();
+  // 旗帜（Canvas 矢量绘制）
+  if (cell.state === CellState.Flagged) {
+    drawFlag(ctx, x + cs / 2, y + cs / 2, cs);
+  }
 
-    for (let row = 0; row < this.config.rows; row++) {
-      for (let col = 0; col < this.config.cols; col++) {
-        const cell = board[row][col];
-        const x = col * CELL_SIZE;
-        const y = row * CELL_SIZE;
+  // 数字
+  if (cell.state === CellState.Revealed && cell.adjacentMines > 0) {
+    ctx.font = `bold ${cs * 0.55}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const colors = ['', '#0000ff', '#008000', '#ff0000', '#000080',
+                    '#800000', '#008080', '#000000', '#808080'];
+    ctx.fillStyle = colors[cell.adjacentMines] || '#000';
+    ctx.fillText(String(cell.adjacentMines), x + cs / 2, y + cs / 2);
+  }
 
-        this.ctx.fillStyle = cell.state === CellState.Revealed ? COLORS.cellRevealed : COLORS.cell;
-        this.ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+  // 外网格线
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, cs, cs);
+}
 
-        this.ctx.strokeStyle = COLORS.border;
-        this.ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+// ---- 脏矩形：仅重绘指定格子列表 ----
+// cells: 需要重绘的 {row, col} 数组，不传则全量重绘
+export function drawCells(
+  board: Cell[][],
+  canvasId: string,
+  cellSize: number,
+  dirtyCells?: { row: number; col: number }[]
+) {
+  const canvas = document.getElementById(canvasId) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
-        if (cell.state === CellState.Flagged) {
-          this.drawFlag(x, y);
-        } else if (cell.state === CellState.Revealed) {
-          if (cell.hasMine) {
-            this.drawMine(x, y);
-          } else if (cell.adjacentMines > 0) {
-            this.drawNumber(cell.adjacentMines, x, y);
-          }
-        }
+  const cs = cellSize;
+  const rows = board.length;
+  const cols = board[0]?.length ?? 0;
+  const mySid = socket.id;  // 当前玩家 sid，用于区分己方/对手格子
+
+  // 判断是否使用脏矩形优化（≥ 16×16 且提供了 dirtyCells）
+  const useDirty = (rows >= 16 || cols >= 16) && dirtyCells && dirtyCells.length > 0;
+
+  if (!useDirty) {
+    // 全量重绘
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = board[r][c];
+        if (!cell) continue;
+        drawOneCell(ctx, cell, c * cs, r * cs, cs, mySid);
       }
     }
-  }
-
-  private drawMine(x: number, y: number): void {
-    const centerX = x + CELL_SIZE / 2;
-    const centerY = y + CELL_SIZE / 2;
-    const radius = CELL_SIZE / 3;
-
-    this.ctx.beginPath();
-    this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-    this.ctx.fillStyle = COLORS.mine;
-    this.ctx.fill();
-    this.ctx.strokeStyle = '#000';
-    this.ctx.lineWidth = 1;
-    this.ctx.stroke();
-
-    this.ctx.beginPath();
-    this.ctx.moveTo(centerX - radius * 0.6, centerY);
-    this.ctx.lineTo(centerX + radius * 0.6, centerY);
-    this.ctx.moveTo(centerX, centerY - radius * 0.6);
-    this.ctx.lineTo(centerX, centerY + radius * 0.6);
-    this.ctx.strokeStyle = '#fff';
-    this.ctx.lineWidth = 2;
-    this.ctx.stroke();
-  }
-
-  private drawFlag(x: number, y: number): void {
-    const poleHeight = CELL_SIZE * 0.6;
-    const poleX = x + CELL_SIZE * 0.3;
-    const poleY = y + CELL_SIZE * 0.1;
-
-    this.ctx.beginPath();
-    this.ctx.moveTo(poleX, poleY);
-    this.ctx.lineTo(poleX, poleY + poleHeight);
-    this.ctx.strokeStyle = '#333';
-    this.ctx.lineWidth = 3;
-    this.ctx.stroke();
-
-    this.ctx.beginPath();
-    this.ctx.moveTo(poleX, poleY);
-    this.ctx.lineTo(poleX + CELL_SIZE * 0.4, poleY + poleHeight * 0.3);
-    this.ctx.lineTo(poleX, poleY + poleHeight * 0.5);
-    this.ctx.closePath();
-    this.ctx.fillStyle = COLORS.flag;
-    this.ctx.fill();
-  }
-
-  private drawNumber(num: number, x: number, y: number): void {
-    this.ctx.font = `${FONT_WEIGHT} ${FONT_SIZE}px Arial`;
-    this.ctx.fillStyle = COLORS.text[num] || '#000';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(
-      num.toString(),
-      x + CELL_SIZE / 2,
-      y + CELL_SIZE / 2
-    );
-  }
-
-  getPositionFromClick(event: MouseEvent): { row: number; col: number } | null {
-    const col = Math.floor(event.offsetX / CELL_SIZE);
-    const row = Math.floor(event.offsetY / CELL_SIZE);
-
-    if (row < 0 || row >= this.config.rows || col < 0 || col >= this.config.cols) {
-      return null;
+  } else {
+    // 脏矩形：逐个格子擦除+重绘
+    for (const { row, col } of dirtyCells) {
+      const cell = board[row]?.[col];
+      if (!cell) continue;
+      const x = col * cs;
+      const y = row * cs;
+      ctx.clearRect(x, y, cs, cs);
+      drawOneCell(ctx, cell, x, y, cs, mySid);
     }
-
-    return { row, col };
   }
+}
+
+/** 纯渲染函数：根据格子二维数组全量绘制棋盘（兼容旧接口） */
+export function drawBoardFromCells(board: Cell[][], canvasId = 'game-canvas', cellSize?: number) {
+  const cs = cellSize ?? CELL_SIZE;
+  drawCells(board, canvasId, cs);
+}
+
+import { getGameState } from './game';
+import { getDynamicCellSize } from './constants';
+
+/** 对战模式使用的渲染（从全局 GameState 取 board），自动计算尺寸 */
+export function drawBoard(dirtyCells?: { row: number; col: number }[]) {
+  const state = getGameState();
+  const rows = state.rows || 9;
+  const cols = state.cols || 9;
+  const cellSize = getDynamicCellSize(rows, cols);
+  // 同步 canvas 尺寸
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null;
+  if (canvas) {
+    canvas.width = cols * cellSize;
+    canvas.height = rows * cellSize;
+  }
+  drawCells(state.board, 'game-canvas', cellSize, dirtyCells);
+}
+
+export function drawGameOverOverlay(_isWin: boolean) {
 }

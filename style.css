@@ -17,21 +17,12 @@ body {
   gap: 15px;
 }
 
-#header {
-  display: flex;
-  gap: 30px;
-  font-size: 18px;
-  font-weight: 600;
+#lobby h1 {
+  margin-bottom: 30px;
 }
 
-canvas {
-  border: 3px solid #ecf0f1;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-#restart {
-  padding: 10px 30px;
+#lobby button {
+  padding: 12px 30px;
   border: none;
   border-radius: 4px;
   font-size: 16px;
@@ -40,8 +31,60 @@ canvas {
   background: #3498db;
   color: white;
   transition: background 0.2s ease;
+  margin: 5px;
 }
 
-#restart:hover {
+#lobby button:hover {
   background: #2980b9;
+}
+
+#lobby input {
+  padding: 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  margin: 5px;
+}
+
+#header {
+  display: flex;
+  gap: 30px;
+  font-size: 18px;
+  font-weight: 600;
+  align-items: center;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bar {
+  width: 100px;
+  height: 16px;
+  background: #444;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bar > div {
+  height: 100%;
+  background: #2ecc71;
+  transition: width 0.3s ease;
+}
+
+#opponent-progress {
+  background: #e74c3c;
+}
+
+canvas {
+  border: 3px solid #ecf0f1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#game-canvas {
+  display: block;
+  margin: 0 auto;
 }
