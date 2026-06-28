@@ -297,7 +297,7 @@ socket.on('rematch_votes_update', (data: any) => {
   handleRematchVotesUpdate(data?.votes || 0);
 });
 
-socket.on('game_restarted', (data: { board: number[][], current_turn: string, host_sid?: string, rows?: number, cols?: number, mines?: number }) => {
+socket.on('game_restarted', (data: { board: number[][], current_turn: string, host_sid?: string, rows?: number, cols?: number, mines?: number, total_safe_cells?: number }) => {
   const r = data.rows || 9;
   const c = data.cols || 9;
   const m = data.mines || 10;
@@ -314,7 +314,8 @@ socket.on('game_restarted', (data: { board: number[][], current_turn: string, ho
   state.rows = r;
   state.cols = c;
   state.isHost = data.host_sid === socket.id;
-  state.godMode = false;  // 新一局重置上帝模式
+  state.godMode = false;
+  state.totalSafeCells = data.total_safe_cells ?? (r * c - m);
   // 动态调整 Canvas 尺寸
   resizeCanvasForMode(r, c);
   waitingDiv.style.display = 'none';

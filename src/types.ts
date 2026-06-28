@@ -28,6 +28,8 @@ export interface LastResult {
   elapsed: number;
   myProgress: number;
   opponentProgress: number;
+  reason?: string;
+  totalSafe?: number;
 }
 
 export interface GameState {
@@ -54,4 +56,6 @@ export interface GameState {
   /** 上帝模式标识（纯本地，刷新即忘） */
   isHost: boolean;
   godMode: boolean;
+  /** 服务端下发的总安全格数（total_safe_cells） */
+  totalSafeCells: number;
 }

@@ -26,6 +26,7 @@ const gameState: GameState = {
   cols: 9,
   isHost: false,
   godMode: false,
+  totalSafeCells: 71,
 };
 
 export function getGameState() {
@@ -84,6 +85,9 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
       gameState.cols = payload.cols || 9;
       gameState.isHost = payload.host_sid === socket.id;
       gameState.godMode = false;  // 新游戏重置上帝模式
+      gameState.totalSafeCells = payload.total_safe_cells ?? (gameState.rows * gameState.cols - gameState.totalMines);
+      gameState.myProgress = 0;
+      gameState.opponentProgress = 0;
       break;
 
     case 'turn_changed':
@@ -95,16 +99,22 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
     case 'cell_revealed': {
       const { row, col, value, by } = payload;
       const cell = gameState.board[row]?.[col];
-      if (!cell || cell.state === CellState.Revealed) return;
+      if (!cell) return;
+      // 若已被揭开则跳过（BFS 批量展开可能重复 emit）
+      if (cell.state === CellState.Revealed) return;
 
+      const wasHidden = cell.state === CellState.Hidden;
       cell.state = CellState.Revealed;
       cell.adjacentMines = value;
-      cell.revealedBy = by;  // 记录揭开者，区分己方/对手格子
+      cell.revealedBy = by;
 
-      if (by === socket.id) {
-        gameState.myProgress++;
-      } else {
-        gameState.opponentProgress++;
+      // 仅统计首次揭开的安全格进度（排除雷格 -1 == -2 on wire）
+      if (wasHidden && cell.hasMine === false) {
+        if (by === socket.id) {
+          gameState.myProgress++;
+        } else {
+          gameState.opponentProgress++;
+        }
       }
       drawBoard([{ row, col }]);
       updateUI();
@@ -112,8 +122,8 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
     }
 
     case 'game_over': {
-      // 新协议：winner_sid / loser_sid 明确标识胜负双方
-      const iWon = payload.winner_sid === socket.id;
+      // 新协议：winner / loser 直接给 sid，reason 区分 mine_hit / all_safe_opened
+      const iWon = payload.winner === socket.id;
       gameState.status = iWon ? GameStatus.Won : GameStatus.Lost;
       gameState.gameMode = 'finished';
       gameState.myTurn = false;
@@ -122,6 +132,8 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
         elapsed: gameState.startTime ? (Date.now() - gameState.startTime) / 1000 : 0,
         myProgress: gameState.myProgress,
         opponentProgress: gameState.opponentProgress,
+        reason: payload.reason,
+        totalSafe: payload.total_safe ?? gameState.totalSafeCells,
       };
       drawBoard();
       showResultModal(gameState.lastResult);
@@ -168,7 +180,7 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function showResultModal(result: { isWin: boolean; elapsed: number; myProgress: number; opponentProgress: number }) {
+export function showResultModal(result: { isWin: boolean; elapsed: number; myProgress: number; opponentProgress: number; reason?: string; totalSafe?: number }) {
   gameState.lastResult = result;
   const modal = document.getElementById('game-over-modal')!;
   const title = document.getElementById('result-title')!;
@@ -177,11 +189,19 @@ export function showResultModal(result: { isWin: boolean; elapsed: number; myPro
   const rematchBtn = document.getElementById('modal-rematch-btn')!;
   const cancelRematchBtn = document.getElementById('modal-cancel-rematch-btn')!;
 
-  title.innerText = result.isWin ? '🎉 胜利！' : '💥 失败';
+  const totalSafe = result.totalSafe ?? gameState.totalSafeCells;
+  const reasonLabel = result.reason === 'mine_hit' ? '踩雷' : '清空安全区域';
+
+  if (result.isWin) {
+    title.innerText = result.reason === 'all_safe_opened' ? '🎉 大获全胜！' : '🎉 胜利！';
+    title.innerText += ` (${reasonLabel})`;
+  } else {
+    title.innerText = result.reason === 'mine_hit' ? '💥 踩雷失败' : '💥 失败';
+  }
   detail.innerHTML =
     `⏱ 用时 <b>${formatTime(result.elapsed)}</b><br>` +
-    `🔍 你已揭开 <b>${result.myProgress}</b> / ${gameState.totalNonMine} 格<br>` +
-    `👤 对手揭开 <b>${result.opponentProgress}</b> / ${gameState.totalNonMine} 格`;
+    `🔍 你已揭开 <b>${result.myProgress}</b> / ${totalSafe} 格<br>` +
+    `👤 对手揭开 <b>${result.opponentProgress}</b> / ${totalSafe} 格`;
   rematchStatus.style.display = 'none';
   modal.style.display = 'flex';
 
