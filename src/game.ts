@@ -111,13 +111,14 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
       break;
     }
 
-    case 'game_over':
-      const isMyMine = payload.by === socket.id;
-      gameState.status = isMyMine ? GameStatus.Lost : GameStatus.Won;
+    case 'game_over': {
+      // 新协议：winner_sid / loser_sid 明确标识胜负双方
+      const iWon = payload.winner_sid === socket.id;
+      gameState.status = iWon ? GameStatus.Won : GameStatus.Lost;
       gameState.gameMode = 'finished';
       gameState.myTurn = false;
       gameState.lastResult = {
-        isWin: !isMyMine,
+        isWin: iWon,
         elapsed: gameState.startTime ? (Date.now() - gameState.startTime) / 1000 : 0,
         myProgress: gameState.myProgress,
         opponentProgress: gameState.opponentProgress,
@@ -125,6 +126,7 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
       drawBoard();
       showResultModal(gameState.lastResult);
       break;
+    }
 
     case 'opponent_disconnected':
       // 已由 main.ts 直接处理，此处为兜底
