@@ -24,6 +24,8 @@ const gameState: GameState = {
   serverTimeOffset: 0,
   rows: 9,
   cols: 9,
+  isHost: false,
+  godMode: false,
 };
 
 export function getGameState() {
@@ -40,7 +42,7 @@ export function initRoomBoard(boardData: number[][], rows?: number, cols?: numbe
       board[r][c] = {
         row: r,
         col: c,
-        hasMine: false,
+        hasMine: val === -2,
         adjacentMines: val,
         state: CellState.Hidden,
       };
@@ -80,6 +82,8 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
       gameState.totalMines = payload.mines || 10;
       gameState.rows = payload.rows || 9;
       gameState.cols = payload.cols || 9;
+      gameState.isHost = payload.host_sid === socket.id;
+      gameState.godMode = false;  // 新游戏重置上帝模式
       break;
 
     case 'turn_changed':

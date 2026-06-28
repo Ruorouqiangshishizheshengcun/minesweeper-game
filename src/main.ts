@@ -289,7 +289,7 @@ socket.on('rematch_votes_update', (data: any) => {
   handleRematchVotesUpdate(data?.votes || 0);
 });
 
-socket.on('game_restarted', (data: { board: number[][], current_turn: string, rows?: number, cols?: number, mines?: number }) => {
+socket.on('game_restarted', (data: { board: number[][], current_turn: string, host_sid?: string, rows?: number, cols?: number, mines?: number }) => {
   const r = data.rows || 9;
   const c = data.cols || 9;
   const m = data.mines || 10;
@@ -305,6 +305,8 @@ socket.on('game_restarted', (data: { board: number[][], current_turn: string, ro
   state.totalMines = m;
   state.rows = r;
   state.cols = c;
+  state.isHost = data.host_sid === socket.id;
+  state.godMode = false;  // 新一局重置上帝模式
   // 动态调整 Canvas 尺寸
   resizeCanvasForMode(r, c);
   waitingDiv.style.display = 'none';
@@ -365,11 +367,26 @@ export function returnToLobby() {
   lobbyDiv.style.display = '';
 }
 
-// ---- 上帝模式快捷键 Ctrl+Shift+G ----
+// ---- 上帝模式：仅房主可用，纯本地视觉效果，无网络通信 ----
+
+export function toggleGodMode() {
+  const state = getGameState();
+  if (!state.isHost) {
+    console.log('[GodMode] 仅房主可用');
+    return;
+  }
+  enableGodMode();
+}
+
+// 挂载到全局供控制台调用（同样受 isHost 限制）
+(window as any).toggleGodMode = toggleGodMode;
+
+// 快捷键 Ctrl+Shift+G（同样受 isHost 限制）
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key === 'G') {
+  if (e.ctrlKey && e.shiftKey && (e.key === 'G' || e.code === 'KeyG')) {
     e.preventDefault();
-    enableGodMode();
+    e.stopPropagation();
+    toggleGodMode();
   }
 });
 

@@ -2,14 +2,26 @@ import { Cell, CellState } from './types';
 import { CELL_SIZE } from './constants';
 import socket from './socket';
 
-// ---- God Mode 预留接口 ----
-// 第五阶段实现时，此处改为 true 并编写透视绘制逻辑即可
-export let godMode = false;
+// ---- 上帝模式（God Mode） ----
+// 纯本地视觉效果：不发送任何网络请求，不影响游戏逻辑，刷新即消失
+// 仅渲染层改动：透视显示所有未揭开的地雷格子
 
 export function enableGodMode() {
-  godMode = !godMode;
-  console.log(`[GodMode] ${godMode ? 'ON' : 'OFF'}`);
-  // 重绘棋盘以立即生效
+  const state = getGameState();
+  state.godMode = !state.godMode;
+  console.log(`[GodMode] ${state.godMode ? 'ON' : 'OFF'}`);
+  if (state.godMode) {
+    // 打印当前棋盘所有地雷坐标快照
+    const minePositions: string[] = [];
+    for (let r = 0; r < state.board.length; r++) {
+      for (let c = 0; c < (state.board[r]?.length || 0); c++) {
+        if (state.board[r][c].hasMine) {
+          minePositions.push(`(${r},${c})`);
+        }
+      }
+    }
+    console.log(`[GodMode] 地雷坐标快照 (${minePositions.length}/${state.totalMines}):`, minePositions.join(', '));
+  }
   drawBoard();
 }
 
@@ -60,9 +72,10 @@ function drawOneCell(
   mySid?: string  // 当前玩家的 socket.id，用于区分己方/对手揭开的格子
 ) {
   let isOpponentCell = false;
+  const state = getGameState();
 
   // 底色
-  if (godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+  if (state.godMode && cell.hasMine && cell.state !== CellState.Revealed) {
     ctx.fillStyle = '#4a1010';
   } else if (cell.state === CellState.Revealed) {
     // 已揭开：根据 revealedBy 区分己方和对手
@@ -94,8 +107,12 @@ function drawOneCell(
     ctx.strokeRect(x + 1, y + 1, cs - 2, cs - 2);
   }
 
-  // 上帝模式：未翻开雷格画小圆点
-  if (godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+  // 上帝模式：未翻开雷格画半透明红色叠加 + 小圆点
+  if (state.godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+    // 半透明红色叠加层
+    ctx.fillStyle = 'rgba(255, 0, 0, 0.35)';
+    ctx.fillRect(x + 2, y + 2, cs - 4, cs - 4);
+    // 红色小圆点标记
     ctx.fillStyle = '#ff4444';
     ctx.beginPath();
     ctx.arc(x + cs / 2, y + cs / 2, cs * 0.12, 0, Math.PI * 2);

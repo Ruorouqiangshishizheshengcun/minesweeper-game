@@ -51,4 +51,7 @@ export interface GameState {
   serverTimeOffset: number;
   rows: number;
   cols: number;
+  /** 上帝模式标识（纯本地，刷新即忘） */
+  isHost: boolean;
+  godMode: boolean;
 }
