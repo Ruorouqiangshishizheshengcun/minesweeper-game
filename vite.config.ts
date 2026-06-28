@@ -6,10 +6,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
+      '/create_room': {
         target: BACKEND_URL,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/join_room': {
+        target: BACKEND_URL,
+        changeOrigin: true,
       },
       '/socket.io': {
         target: BACKEND_URL,

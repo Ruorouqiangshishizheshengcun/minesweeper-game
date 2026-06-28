@@ -59,6 +59,14 @@ export function startGameUI() {
   // 显示旗子模式按钮
   const flagBar = document.getElementById('flag-mode-bar');
   if (flagBar) flagBar.style.display = '';
+
+  // 隐蔽上帝模式开关：点击雷数图标（只有房主生效，对手点击无变化）
+  const mineCountEl = document.getElementById('mine-count');
+  if (mineCountEl && !(mineCountEl as any).__godModeBound) {
+    (mineCountEl as any).__godModeBound = true;
+    mineCountEl.addEventListener('click', () => toggleGodMode());
+  }
+
   drawBoard();
   startUIUpdates();
   bindCanvasEventsOnce();

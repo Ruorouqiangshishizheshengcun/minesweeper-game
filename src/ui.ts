@@ -49,11 +49,12 @@ export function updateUI() {
     roomEl.innerText = `🔑 ${state.roomId}`;
   }
 
-  // 剩余雷数
+  // 剩余雷数（上帝模式开启时图标变 💀）
   const mineEl = document.getElementById('mine-count');
   if (mineEl) {
     const flagCount = state.board.flat().filter(c => c.state === CellState.Flagged).length;
-    mineEl.innerText = `💣 ${state.totalMines - flagCount}`;
+    const icon = state.godMode ? '💀' : '💣';
+    mineEl.innerText = `${icon} ${state.totalMines - flagCount}`;
   }
 
   // ---- 回合指示器（色块指示灯） ----
