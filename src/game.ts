@@ -1,4 +1,4 @@
-import { GameState, Cell, CellState, GameStatus } from './types';
+import { GameState, Cell, CellState, GameStatus, LS_KEYS } from './types';
 import { drawBoard } from './renderer';
 import { updateUI } from './ui';
 import socket from './socket';
@@ -26,7 +26,7 @@ const gameState: GameState = {
   cols: 9,
   isHost: false,
   godMode: false,
-  totalSafeCells: 71,
+  opponentOffline: false,
 };
 
 export function getGameState() {
@@ -74,6 +74,8 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
   switch (type) {
     case 'game_started':
       gameState.status = GameStatus.Playing;
+      gameState.myProgress = 0;
+      gameState.opponentProgress = 0;
       gameState.serverTimeOffset = (payload.start_time || Date.now()) - Date.now();
       gameState.startTime = Date.now() + gameState.serverTimeOffset;
       gameState.currentTurn = payload.current_turn || null;
@@ -85,9 +87,7 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
       gameState.cols = payload.cols || 9;
       gameState.isHost = payload.host_sid === socket.id;
       gameState.godMode = false;  // 新游戏重置上帝模式
-      gameState.totalSafeCells = payload.total_safe_cells ?? (gameState.rows * gameState.cols - gameState.totalMines);
-      gameState.myProgress = 0;
-      gameState.opponentProgress = 0;
+      gameState.opponentOffline = false;  // 新游戏重置对手离线标记
       break;
 
     case 'turn_changed':
@@ -99,46 +99,39 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
     case 'cell_revealed': {
       const { row, col, value, by } = payload;
       const cell = gameState.board[row]?.[col];
-      if (!cell) return;
-      // 若已被揭开则跳过（BFS 批量展开可能重复 emit）
-      if (cell.state === CellState.Revealed) return;
+      if (!cell || cell.state === CellState.Revealed) return;
 
-      const wasHidden = cell.state === CellState.Hidden;
       cell.state = CellState.Revealed;
       cell.adjacentMines = value;
-      cell.revealedBy = by;
+      cell.revealedBy = by;  // 记录揭开者，区分己方/对手格子
 
-      // 仅统计首次揭开的安全格进度（排除雷格 -1 == -2 on wire）
-      if (wasHidden && cell.hasMine === false) {
-        if (by === socket.id) {
-          gameState.myProgress++;
-        } else {
-          gameState.opponentProgress++;
-        }
+      if (by === socket.id) {
+        gameState.myProgress++;
+      } else {
+        gameState.opponentProgress++;
       }
       drawBoard([{ row, col }]);
       updateUI();
       break;
     }
 
-    case 'game_over': {
-      // 新协议：winner / loser 直接给 sid，reason 区分 mine_hit / all_safe_opened
+    case 'game_over':
+      // 严格根据 winner 字段判断胜负（不再依赖 by 字段推断）
       const iWon = payload.winner === socket.id;
       gameState.status = iWon ? GameStatus.Won : GameStatus.Lost;
       gameState.gameMode = 'finished';
       gameState.myTurn = false;
       gameState.lastResult = {
         isWin: iWon,
+        reason: payload.reason || '',
         elapsed: gameState.startTime ? (Date.now() - gameState.startTime) / 1000 : 0,
-        myProgress: gameState.myProgress,
-        opponentProgress: gameState.opponentProgress,
-        reason: payload.reason,
-        totalSafe: payload.total_safe ?? gameState.totalSafeCells,
+        myProgress: iWon ? (payload.winner_progress ?? 0) : (payload.loser_progress ?? 0),
+        opponentProgress: iWon ? (payload.loser_progress ?? 0) : (payload.winner_progress ?? 0),
+        totalSafe: payload.total_safe || gameState.totalNonMine,
       };
       drawBoard();
       showResultModal(gameState.lastResult);
       break;
-    }
 
     case 'opponent_disconnected':
       // 已由 main.ts 直接处理，此处为兜底
@@ -152,6 +145,10 @@ export function updateGameFromServer(event: { type: string; payload?: any }) {
 
 export function handleCellClick(row: number, col: number) {
   if (gameState.gameMode !== 'playing') return;
+  if (gameState.opponentOffline) {
+    showToast('对手已退出房间，无法继续操作');
+    return;
+  }
   if (!gameState.myTurn) {
     showToast('⏳ 请等待对手操作');
     return;
@@ -180,7 +177,7 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function showResultModal(result: { isWin: boolean; elapsed: number; myProgress: number; opponentProgress: number; reason?: string; totalSafe?: number }) {
+export function showResultModal(result: LastResult) {
   gameState.lastResult = result;
   const modal = document.getElementById('game-over-modal')!;
   const title = document.getElementById('result-title')!;
@@ -189,19 +186,23 @@ export function showResultModal(result: { isWin: boolean; elapsed: number; myPro
   const rematchBtn = document.getElementById('modal-rematch-btn')!;
   const cancelRematchBtn = document.getElementById('modal-cancel-rematch-btn')!;
 
-  const totalSafe = result.totalSafe ?? gameState.totalSafeCells;
-  const reasonLabel = result.reason === 'mine_hit' ? '踩雷' : '清空安全区域';
-
   if (result.isWin) {
-    title.innerText = result.reason === 'all_safe_opened' ? '🎉 大获全胜！' : '🎉 胜利！';
-    title.innerText += ` (${reasonLabel})`;
+    if (result.reason === 'last_cell_opened') {
+      title.innerText = '🎉 胜利！你翻开了最后一格';
+    } else {
+      title.innerText = '🎉 胜利！对手踩雷了';
+    }
   } else {
-    title.innerText = result.reason === 'mine_hit' ? '💥 踩雷失败' : '💥 失败';
+    if (result.reason === 'mine_hit') {
+      title.innerText = '💥 失败！你踩到地雷了';
+    } else {
+      title.innerText = '💥 失败！对手翻开了最后一格';
+    }
   }
   detail.innerHTML =
     `⏱ 用时 <b>${formatTime(result.elapsed)}</b><br>` +
-    `🔍 你已揭开 <b>${result.myProgress}</b> / ${totalSafe} 格<br>` +
-    `👤 对手揭开 <b>${result.opponentProgress}</b> / ${totalSafe} 格`;
+    `🔍 你已揭开 <b>${result.myProgress}</b> / ${result.totalSafe} 格<br>` +
+    `👤 对手揭开 <b>${result.opponentProgress}</b> / ${result.totalSafe} 格`;
   rematchStatus.style.display = 'none';
   modal.style.display = 'flex';
 
@@ -228,7 +229,16 @@ export function showResultModal(result: { isWin: boolean; elapsed: number; myPro
   if (backBtn) {
     backBtn.onclick = () => {
       modal.style.display = 'none';
-      // 离开时刷新页面重置所有 Socket 状态
+      // 清除缓存 + URL 参数，避免刷新后自动恢复已结束的对局
+      try {
+        localStorage.removeItem(LS_KEYS.ROOM_ID);
+        localStorage.removeItem(LS_KEYS.ROOM_TOKEN);
+        localStorage.removeItem('minesweeper_room_role');
+        localStorage.removeItem(LS_KEYS.SOLO);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('roomId');
+        window.history.replaceState({}, '', url.toString());
+      } catch { /* noop */ }
       location.reload();
     };
   }
@@ -315,6 +325,49 @@ export function showDisconnectModal(votesCleared = false) {
   backBtn.innerText = '返回大厅';
   backBtn.onclick = () => {
     modal.style.display = 'none';
+    // 清除缓存 + URL 参数，避免刷新后自动恢复已断开的房间
+    try {
+      localStorage.removeItem(LS_KEYS.ROOM_ID);
+      localStorage.removeItem(LS_KEYS.ROOM_TOKEN);
+      localStorage.removeItem('minesweeper_room_role');
+      localStorage.removeItem(LS_KEYS.SOLO);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('roomId');
+      window.history.replaceState({}, '', url.toString());
+    } catch { /* noop */ }
+    location.reload();
+  };
+}
+
+export function showOpponentOfflineModal(message: string) {
+  gameState.opponentOffline = true;
+  const modal = document.getElementById('game-over-modal')!;
+  const title = document.getElementById('result-title')!;
+  const detail = document.getElementById('result-detail')!;
+  const rematchStatus = document.getElementById('rematch-status')!;
+  const rematchBtn = document.getElementById('modal-rematch-btn')!;
+  const cancelRematchBtn = document.getElementById('modal-cancel-rematch-btn')!;
+  const backBtn = document.getElementById('back-lobby-btn')!;
+
+  title.innerText = '🚪 对手已退出房间';
+  detail.innerHTML = message;
+  rematchStatus.style.display = 'none';
+  rematchBtn.style.display = 'none';
+  cancelRematchBtn.style.display = 'none';
+  modal.style.display = 'flex';
+
+  backBtn.innerText = '返回大厅';
+  backBtn.onclick = () => {
+    modal.style.display = 'none';
+    try {
+      localStorage.removeItem(LS_KEYS.ROOM_ID);
+      localStorage.removeItem(LS_KEYS.ROOM_TOKEN);
+      localStorage.removeItem('minesweeper_room_role');
+      localStorage.removeItem(LS_KEYS.SOLO);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('roomId');
+      window.history.replaceState({}, '', url.toString());
+    } catch { /* noop */ }
     location.reload();
   };
 }

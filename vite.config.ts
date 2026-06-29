@@ -14,6 +14,10 @@ export default defineConfig({
         target: BACKEND_URL,
         changeOrigin: true,
       },
+      '/room_state': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+      },
       '/socket.io': {
         target: BACKEND_URL,
         changeOrigin: true,

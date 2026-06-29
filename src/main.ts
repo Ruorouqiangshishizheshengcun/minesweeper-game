@@ -1,4 +1,4 @@
-import { createRoom, joinRoom } from './api';
+import { createRoom, joinRoom, getRoomState } from './api';
 import socket from './socket';
 import {
   initRoomBoard,
@@ -12,13 +12,14 @@ import {
   handleRematchVotesUpdate,
   showDisconnectModal,
   showToast,
+  showOpponentOfflineModal,
 } from './game';
 import { drawBoard, enableGodMode } from './renderer';
 import { startUIUpdates } from './ui';
 import { CELL_SIZE, getDynamicCellSize, DIFFICULTY_PRESETS, DIFF_VALID, type DifficultyKey } from './constants';
-import { GameStatus } from './types';
+import { GameStatus, LS_KEYS, CellState } from './types';
 import './style.css';
-import { startSoloGame } from './solo';
+import { startSoloGame, initSoloUI, tryRestoreSoloGame, clearSoloSave, isSoloActive, goBackToLobby } from './solo';
 import { toggleFlagMode, bindCanvasInputEvents } from './input';
 
 const lobbyDiv = document.getElementById('lobby')!;
@@ -50,6 +51,120 @@ waitingDiv.style.display = 'none';
 gameUIDiv.style.display = 'none';
 
 let gameStarted = false;
+
+// ---- 房间缓存工具 ----
+function setRoomCache(roomId: string, token: string, role: 'host' | 'guest') {
+  try {
+    localStorage.setItem(LS_KEYS.ROOM_ID, roomId);
+    localStorage.setItem(LS_KEYS.ROOM_TOKEN, token);
+    localStorage.setItem('minesweeper_room_role', role);
+    // URL 参数同步
+    const url = new URL(window.location.href);
+    url.searchParams.set('roomId', roomId);
+    window.history.replaceState({}, '', url.toString());
+  } catch { /* noop */ }
+}
+
+function clearRoomCache() {
+  try {
+    localStorage.removeItem(LS_KEYS.ROOM_ID);
+    localStorage.removeItem(LS_KEYS.ROOM_TOKEN);
+    localStorage.removeItem('minesweeper_room_role');
+    // 清除 URL 参数
+    const url = new URL(window.location.href);
+    url.searchParams.delete('roomId');
+    window.history.replaceState({}, '', url.toString());
+  } catch { /* noop */ }
+}
+
+// ---- 多人房间恢复 ----
+async function tryRestoreMultiplayerRoom(roomId: string): Promise<boolean> {
+  try {
+    const token = localStorage.getItem(LS_KEYS.ROOM_TOKEN);
+    const role = localStorage.getItem('minesweeper_room_role');
+    if (!token) {
+      console.log('[Reconnect] 无有效 token，跳过多人恢复');
+      return false;
+    }
+
+    // 请求后端获取房间当前状态
+    console.log('[Reconnect] 请求房间状态:', roomId);
+    const state = await getRoomState(roomId);
+    if (!state) return false;
+
+    // 重建棋盘
+    initRoomBoard(state.board, state.rows, state.cols, state.mines);
+    const gs = getGameState();
+    gs.roomId = roomId;
+    gs.token = token;
+    gs.role = (role === 'host' || role === 'guest') ? role : 'guest';
+    gs.isHost = role === 'host';
+    gs.rows = state.rows;
+    gs.cols = state.cols;
+    gs.totalMines = state.mines;
+
+    // 标记已翻开的格子
+    for (const [r, c] of state.revealed_cells) {
+      const cell = gs.board[r]?.[c];
+      if (cell && cell.state !== CellState.Revealed) {
+        cell.state = CellState.Revealed;
+      }
+    }
+    // 重新计算进度（已翻开格子数对半分，实际由后续事件精确更新）
+    gs.myProgress = Math.floor(state.revealed_cells.length / 2);
+    gs.opponentProgress = state.revealed_cells.length - gs.myProgress;
+
+    // 设置 Canvas 尺寸
+    resizeCanvasForMode(state.rows, state.cols);
+
+    if (state.game_started) {
+      gs.status = GameStatus.Playing;
+      gs.gameMode = 'playing';
+      gs.currentTurn = state.current_turn;
+      // myTurn 初始设为 false，由后端 reconnect 时广播的 turn_changed 事件修正
+      // （state.current_turn 是旧 sid，无法和新的 socket.id 直接对比）
+      gs.myTurn = false;
+
+      // 显示游戏 UI
+      waitingDiv.style.display = 'none';
+      lobbyDiv.style.display = 'none';
+      gameUIDiv.style.display = 'block';
+      const flagBar = document.getElementById('flag-mode-bar');
+      if (flagBar) flagBar.style.display = '';
+      const mineCountEl = document.getElementById('mine-count');
+      if (mineCountEl && !(mineCountEl as any).__godModeBound) {
+        (mineCountEl as any).__godModeBound = true;
+        mineCountEl.addEventListener('click', () => toggleGodMode());
+      }
+
+      gameStarted = true;
+      drawBoard();
+      startUIUpdates();
+      bindCanvasEventsOnce();
+    } else {
+      // 游戏未开始，回到等待室
+      gs.status = GameStatus.Waiting;
+      gs.gameMode = 'room';
+      showWaitingRoom(roomId);
+    }
+
+    // 重新加入 Socket 房间
+    if (socket.connected) {
+      socket.emit('join_room_event', { room_id: roomId, token });
+    } else {
+      socket.once('connect', () => {
+        socket.emit('join_room_event', { room_id: roomId, token });
+      });
+    }
+
+    console.log('[Reconnect] 多人房间恢复成功:', roomId);
+    return true;
+  } catch (err: any) {
+    console.warn('[Reconnect] 多人房间恢复失败:', err?.message || err);
+    clearRoomCache();
+    return false;
+  }
+}
 
 export function startGameUI() {
   if (gameStarted) return;
@@ -180,6 +295,7 @@ document.getElementById('create-confirm-btn')?.addEventListener('click', async (
 
     initRoomBoard(data.board, data.rows, data.cols, data.mines);
     setRoomInfo(data.room_id, data.token, 'host');
+    setRoomCache(data.room_id, data.token, 'host');
 
     // 动态调整 Canvas 尺寸
     const r = data.rows || 9;
@@ -225,7 +341,8 @@ joinBtn.addEventListener('click', async () => {
     console.log('加入房间成功', data);
 
     initRoomBoard(data.board, data.rows, data.cols, data.mines);
-    setRoomInfo(roomId, data.token, 'guest');
+    setRoomInfo(roomId, data.token, data.role || 'guest');
+    setRoomCache(roomId, data.token, data.role || 'guest');
 
     // 动态调整 Canvas 尺寸
     const r = data.rows || 9;
@@ -252,6 +369,7 @@ joinBtn.addEventListener('click', async () => {
 const soloBtn = document.getElementById('solo-btn');
 if (soloBtn) {
   soloBtn.addEventListener('click', () => {
+    clearRoomCache(); // 进入单机时清除多人缓存
     startSoloGame();
   });
 }
@@ -261,10 +379,36 @@ document.getElementById('flag-mode-btn')?.addEventListener('click', () => {
   toggleFlagMode();
 });
 
+// 返回大厅按钮
+document.getElementById('back-to-lobby-btn')?.addEventListener('click', () => {
+  if (isSoloActive) {
+    // 单机模式：直接清空缓存回大厅
+    goBackToLobby();
+  } else {
+    // 多人模式：通知后端退出房间
+    const gs = getGameState();
+    if (socket.connected && gs.roomId) {
+      socket.emit('leave_room', { room_id: gs.roomId, token: gs.token });
+    }
+    // 清除缓存 + URL 参数
+    clearRoomCache();
+    clearSoloSave();
+    returnToLobby();
+  }
+});
+
 socket.on('game_started', (data) => {
   console.log('游戏开始！', data);
+  // 重新初始化棋盘（支持玩家退局后重连二次开局场景）
+  if (data.board) {
+    initRoomBoard(data.board, data.rows, data.cols, data.mines);
+  }
   updateGameFromServer({ type: 'game_started', payload: data });
   resizeCanvasForMode(data.rows || 9, data.cols || 9);
+  // 允许二次触发 game_started（退局重连场景不卡死）
+  gameStarted = false;
+  canvasBound = false;
+  hideResultModal();
   startGameUI();
 });
 
@@ -278,6 +422,20 @@ socket.on('game_over', (data: any) => {
 
 socket.on('opponent_disconnected', (data: any) => {
   showDisconnectModal(!!data?.votes_cleared);
+});
+
+// 对手主动点击「返回大厅」退出房间（区别于断线重连）
+socket.on('opponent_offline', (data: any) => {
+  console.log('[OpponentOffline] 对手已退出房间:', data);
+  const msg = data?.message || '对手已退出房间';
+  showOpponentOfflineModal(msg);
+});
+
+// ---- 玩家重连上线：对手刷新后重新加入房间 ----
+socket.on('player_reonline', (data: any) => {
+  console.log('[Reonline] 对手已重连上线:', data?.message);
+  hideResultModal();
+  showToast(data?.message || '对手已重新上线', 2000);
 });
 
 socket.on('turn_changed', (data: any) => {
@@ -297,7 +455,7 @@ socket.on('rematch_votes_update', (data: any) => {
   handleRematchVotesUpdate(data?.votes || 0);
 });
 
-socket.on('game_restarted', (data: { board: number[][], current_turn: string, host_sid?: string, rows?: number, cols?: number, mines?: number, total_safe_cells?: number }) => {
+socket.on('game_restarted', (data: { board: number[][], current_turn: string, host_sid?: string, rows?: number, cols?: number, mines?: number }) => {
   const r = data.rows || 9;
   const c = data.cols || 9;
   const m = data.mines || 10;
@@ -314,8 +472,9 @@ socket.on('game_restarted', (data: { board: number[][], current_turn: string, ho
   state.rows = r;
   state.cols = c;
   state.isHost = data.host_sid === socket.id;
-  state.godMode = false;
-  state.totalSafeCells = data.total_safe_cells ?? (r * c - m);
+  state.godMode = false;  // 新一局重置上帝模式
+  state.opponentOffline = false;  // 重置对手离线标记
+  clearSoloSave(); // 清除单机缓存避免冲突
   // 动态调整 Canvas 尺寸
   resizeCanvasForMode(r, c);
   waitingDiv.style.display = 'none';
@@ -331,6 +490,10 @@ socket.on('player_joined', (data: any) => {
   console.log('玩家加入:', data.message);
   if (waitingMessage) {
     waitingMessage.innerText = data.message;
+  }
+  // 检测房间已满（2/2），隐藏对手离线弹窗准备开局
+  if (data.message && data.message.includes('2/2')) {
+    hideResultModal();
   }
 });
 
@@ -365,6 +528,8 @@ export function returnToLobby() {
   hideResultModal();
   gameStarted = false;
   canvasBound = false;
+  clearRoomCache();
+  clearSoloSave();
   waitingDiv.style.display = 'none';
   gameUIDiv.style.display = 'none';
   const flagBar = document.getElementById('flag-mode-bar');
@@ -399,11 +564,37 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ---- 页面初始化：自动恢复对局状态 ----
+(async function initPage() {
+  // 短暂隐藏大厅避免闪屏
+  lobbyDiv.style.display = 'none';
+
+  // 1. 检测 URL 中的 roomId → 尝试恢复多人房间
+  const params = new URLSearchParams(window.location.search);
+  const urlRoomId = params.get('roomId');
+  if (urlRoomId) {
+    const restored = await tryRestoreMultiplayerRoom(urlRoomId);
+    if (restored) return;
+    // 恢复失败，清除残留缓存
+    clearRoomCache();
+  }
+
+  // 2. 检测 localStorage 中的单机缓存 → 尝试恢复单机对局
+  if (tryRestoreSoloGame()) {
+    initSoloUI();
+    return;
+  }
+
+  // 3. 没有可恢复的对局，显示大厅
+  lobbyDiv.style.display = '';
+})();
+
 // ---- Socket 事件列表（用于离开房间时清理） ----
 const socketEvents = [
   'game_started', 'cell_revealed', 'game_over', 'opponent_disconnected',
   'turn_changed', 'rematch_waiting', 'rematch_votes_update', 'game_restarted',
-  'player_joined', 'waiting_for_opponent', 'error'
+  'player_joined', 'waiting_for_opponent', 'error', 'player_reonline',
+  'opponent_offline',
 ];
 
 export function cleanupSocket() {

@@ -25,11 +25,11 @@ export interface Cell {
 
 export interface LastResult {
   isWin: boolean;
+  reason: 'last_cell_opened' | 'mine_hit' | '';
   elapsed: number;
   myProgress: number;
   opponentProgress: number;
-  reason?: string;
-  totalSafe?: number;
+  totalSafe: number;
 }
 
 export interface GameState {
@@ -56,6 +56,26 @@ export interface GameState {
   /** 上帝模式标识（纯本地，刷新即忘） */
   isHost: boolean;
   godMode: boolean;
-  /** 服务端下发的总安全格数（total_safe_cells） */
-  totalSafeCells: number;
+  /** 对手是否已主动退出（退出 vs 断线区分） */
+  opponentOffline: boolean;
 }
+
+/** 单机模式缓存数据结构 */
+export interface SoloCacheData {
+  rows: number;
+  cols: number;
+  totalMines: number;
+  totalNonMineCount: number;
+  revealedCount: number;
+  firstClickDone: boolean;
+  gameOver: boolean;
+  /** 每格状态序列化：{ "r,c": { hasMine, adjacentMines, state } } */
+  cells: Record<string, { hasMine: boolean; adjacentMines: number; state: CellState }>;
+}
+
+/** 多人模式缓存 key */
+export const LS_KEYS = {
+  SOLO: 'minesweeper_solo',
+  ROOM_ID: 'minesweeper_room_id',
+  ROOM_TOKEN: 'minesweeper_room_token',
+} as const;

@@ -6,6 +6,10 @@ import socket from './socket';
 // 纯本地视觉效果：不发送任何网络请求，不影响游戏逻辑，刷新即消失
 // 仅渲染层改动：透视显示所有未揭开的地雷格子
 
+// 单机模式的 godMode 状态（由 solo.ts 通过 setSoloGodMode 控制）
+let soloGodMode = false;
+export function setSoloGodMode(v: boolean) { soloGodMode = v; }
+
 export function enableGodMode() {
   const state = getGameState();
   state.godMode = !state.godMode;
@@ -75,7 +79,7 @@ function drawOneCell(
   const state = getGameState();
 
   // 底色
-  if (state.godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+  if ((state.godMode || soloGodMode) && cell.hasMine && cell.state !== CellState.Revealed) {
     ctx.fillStyle = '#4a1010';
   } else if (cell.state === CellState.Revealed) {
     // 已揭开：根据 revealedBy 区分己方和对手
@@ -108,7 +112,7 @@ function drawOneCell(
   }
 
   // 上帝模式：未翻开雷格画半透明红色叠加 + 小圆点
-  if (state.godMode && cell.hasMine && cell.state !== CellState.Revealed) {
+  if ((state.godMode || soloGodMode) && cell.hasMine && cell.state !== CellState.Revealed) {
     // 半透明红色叠加层
     ctx.fillStyle = 'rgba(255, 0, 0, 0.35)';
     ctx.fillRect(x + 2, y + 2, cs - 4, cs - 4);
@@ -200,11 +204,15 @@ export function drawBoard(dirtyCells?: { row: number; col: number }[]) {
   const rows = state.rows || 9;
   const cols = state.cols || 9;
   const cellSize = getDynamicCellSize(rows, cols);
-  // 同步 canvas 尺寸
+  // 仅在尺寸变化时同步 canvas 宽高（设置 width/height 会清空 canvas，脏矩形模式不能无条件执行）
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null;
   if (canvas) {
-    canvas.width = cols * cellSize;
-    canvas.height = rows * cellSize;
+    const newW = cols * cellSize;
+    const newH = rows * cellSize;
+    if (canvas.width !== newW || canvas.height !== newH) {
+      canvas.width = newW;
+      canvas.height = newH;
+    }
   }
   drawCells(state.board, 'game-canvas', cellSize, dirtyCells);
 }

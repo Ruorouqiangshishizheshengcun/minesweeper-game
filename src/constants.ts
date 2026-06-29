@@ -22,10 +22,17 @@ export const DIFF_VALID = {
 } as const;
 
 // 动态计算格子尺寸，确保棋盘在视口内完整显示
+// 缓存避免每次调用触发 reflow（window.innerWidth/innerHeight 读取）
+let _cachedCellSize = 0;
+let _cachedKey = '';
 export function getDynamicCellSize(rows: number, cols: number): number {
-  const maxWidth = Math.min(window.innerWidth * 0.9, 520);
+  const key = `${rows}x${cols}_${window.innerWidth}x${window.innerHeight}`;
+  if (key === _cachedKey && _cachedCellSize > 0) return _cachedCellSize;
+  const maxWidth = Math.min(window.innerWidth * 0.9, 700);
   const maxHeight = window.innerHeight * 0.55;
   const fromWidth = Math.floor(maxWidth / cols);
   const fromHeight = Math.floor(maxHeight / rows);
-  return Math.max(20, Math.min(40, fromWidth, fromHeight));
+  _cachedCellSize = Math.max(20, Math.min(40, fromWidth, fromHeight));
+  _cachedKey = key;
+  return _cachedCellSize;
 }

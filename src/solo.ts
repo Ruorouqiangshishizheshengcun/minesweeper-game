@@ -1,5 +1,5 @@
-import { Cell, CellState } from './types';
-import { drawBoardFromCells, drawCells } from './renderer';
+import { Cell, CellState, SoloCacheData, LS_KEYS } from './types';
+import { drawBoardFromCells, drawCells, setSoloGodMode } from './renderer';
 import { ROWS, COLS, CELL_SIZE, getDynamicCellSize, DIFFICULTY_PRESETS, type DifficultyKey } from './constants';
 import { bindCanvasInputEvents, setFlagMode } from './input';
 
@@ -15,11 +15,99 @@ let firstClickDone = false;
 let revealedCount = 0;
 let totalNonMineCount = 0;
 export let isSoloActive = false;
+// 上帝模式（纯本地视觉效果，刷新即消失）
+let godMode = false;
 // 记录当前难度参数，确保「再来一局」沿用同一难度
 let currentDifficulty: DifficultyKey | null = 'easy';
 let customParams: { rows: number; cols: number; mines: number } | null = null;
 // 当前 solo 单格像素尺寸
 let soloCellSize = CELL_SIZE;
+
+// ---- 单机持久化 ----
+function saveSoloState() {
+  if (gameOver) return; // 对局已结束时不再写缓存
+  try {
+    const cells: Record<string, { hasMine: boolean; adjacentMines: number; state: CellState }> = {};
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = board[r]?.[c];
+        if (cell) {
+          cells[`${r},${c}`] = {
+            hasMine: cell.hasMine,
+            adjacentMines: cell.adjacentMines,
+            state: cell.state,
+          };
+        }
+      }
+    }
+    const data: SoloCacheData = {
+      rows,
+      cols,
+      totalMines,
+      totalNonMineCount,
+      revealedCount,
+      firstClickDone,
+      gameOver,
+      cells,
+    };
+    localStorage.setItem(LS_KEYS.SOLO, JSON.stringify(data));
+  } catch {
+    // 数据损坏时静默清理
+    clearSoloSave();
+  }
+}
+
+export function clearSoloSave() {
+  try { localStorage.removeItem(LS_KEYS.SOLO); } catch { /* noop */ }
+}
+
+/** 尝试从缓存恢复单机对局，返回 true 表示已恢复 */
+export function tryRestoreSoloGame(): boolean {
+  try {
+    const raw = localStorage.getItem(LS_KEYS.SOLO);
+    if (!raw) return false;
+
+    const data: SoloCacheData = JSON.parse(raw);
+    // 基本合法性校验
+    if (!data.cells || !data.rows || !data.cols || data.gameOver) {
+      clearSoloSave();
+      return false;
+    }
+    if (data.rows < 5 || data.cols < 5 || data.totalMines < 1) {
+      clearSoloSave();
+      return false;
+    }
+
+    // 恢复状态变量
+    rows = data.rows;
+    cols = data.cols;
+    totalMines = data.totalMines;
+    totalNonMineCount = data.totalNonMineCount;
+    revealedCount = data.revealedCount;
+    firstClickDone = data.firstClickDone;
+    gameOver = data.gameOver;
+    currentDifficulty = null;
+    customParams = { rows, cols, mines: totalMines };
+    isSoloActive = true;
+
+    // 重建 board
+    board = [];
+    for (let r = 0; r < rows; r++) {
+      board[r] = [];
+      for (let c = 0; c < cols; c++) {
+        const saved = data.cells[`${r},${c}`];
+        board[r][c] = saved
+          ? { row: r, col: c, hasMine: saved.hasMine, adjacentMines: saved.adjacentMines, state: saved.state }
+          : { row: r, col: c, hasMine: false, adjacentMines: 0, state: CellState.Hidden };
+      }
+    }
+
+    return true;
+  } catch {
+    clearSoloSave();
+    return false;
+  }
+}
 
 // ---- 棋盘生成 ----
 function generateBoard(rCount: number, cCount: number, mines: number): Cell[][] {
@@ -184,6 +272,7 @@ function fmtTime(seconds: number): string {
 function showSoloResult(win: boolean) {
   stopTimer();
   gameOver = true;
+  clearSoloSave(); // 对局结束，清除缓存避免刷新后恢复已结束对局
   const elapsed = (Date.now() - startTime) / 1000;
 
   const modal = document.getElementById('solo-result-modal')!;
@@ -223,12 +312,14 @@ export function handleSoloCellClick(row: number, col: number) {
   if (cell.hasMine) {
     cell.state = CellState.Revealed;
     drawCells(board, 'game-canvas', soloCellSize, [{ row, col }]);
+    // 踩雷不保存状态，直接结束 + 清除缓存
     showSoloResult(false);
     return;
   }
 
   const newCells = revealCell(row, col);
   drawCells(board, 'game-canvas', soloCellSize, newCells.map(c => ({ row: c.row, col: c.col })));
+  saveSoloState();
 
   if (revealedCount >= totalNonMineCount) {
     showSoloResult(true);
@@ -243,6 +334,28 @@ export function handleSoloCellRightClick(row: number, col: number) {
   cell.state = cell.state === CellState.Flagged ? CellState.Hidden : CellState.Flagged;
   drawCells(board, 'game-canvas', soloCellSize, [{ row, col }]);
   updateSoloUI();
+  saveSoloState();
+}
+
+// ---- 上帝模式切换（纯本地视觉效果） ----
+export function toggleSoloGodMode() {
+  godMode = !godMode;
+  setSoloGodMode(godMode);
+  console.log(`[GodMode] ${godMode ? 'ON' : 'OFF'}`);
+  if (godMode) {
+    // 打印当前单机棋盘所有地雷坐标快照
+    const minePositions: string[] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (board[r]?.[c]?.hasMine) {
+          minePositions.push(`(${r},${c})`);
+        }
+      }
+    }
+    console.log(`[GodMode] 地雷坐标快照 (${minePositions.length}/${totalMines}):`, minePositions.join(', '));
+  }
+  // 全量重绘棋盘使上帝模式视觉效果生效
+  drawBoardFromCells(board, 'game-canvas', soloCellSize);
 }
 
 // ---- 启动/返回 ----
@@ -277,10 +390,14 @@ export function startSoloGame(pRows?: number, pCols?: number, pMines?: number) {
   if (totalMines > maxMines) totalMines = maxMines;
   if (totalMines < 1) totalMines = 1;
 
+  clearSoloSave(); // 新对局开始前清除旧缓存
   gameOver = false;
   firstClickDone = false;
   revealedCount = 0;
   isSoloActive = true;
+  // 重置上帝模式
+  godMode = false;
+  setSoloGodMode(false);
   totalNonMineCount = rows * cols - totalMines;
 
   board = generateBoard(rows, cols, totalMines);
@@ -311,6 +428,13 @@ export function startSoloGame(pRows?: number, pCols?: number, pMines?: number) {
   if (mineEl) {
     mineEl.style.display = '';
     mineEl.innerText = `💣 ${totalMines}`;
+    // 隐蔽入口：点击雷数图标切换上帝模式
+    if (!(mineEl as any).__soloGodModeBound) {
+      (mineEl as any).__soloGodModeBound = true;
+      mineEl.addEventListener('click', () => {
+        if (isSoloActive) toggleSoloGodMode();
+      });
+    }
   }
 
   // 显示难度选择栏
@@ -324,6 +448,62 @@ export function startSoloGame(pRows?: number, pCols?: number, pMines?: number) {
   if (custPanel) custPanel.style.display = 'none';
 
   // 高亮当前难度按钮
+  updateDifficultyHighlight();
+
+  drawBoardFromCells(board, 'game-canvas', soloCellSize);
+  startTimer();
+  saveSoloState(); // 持久化新对局
+  bindSoloCanvasEvents();
+  bindSoloDifficultyEvents();
+}
+
+/** 使用已恢复的棋盘初始化单机 UI（用于刷新恢复，跳过棋盘生成） */
+export function initSoloUI() {
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+  soloCellSize = getDynamicCellSize(rows, cols);
+  canvas.width = cols * soloCellSize;
+  canvas.height = rows * soloCellSize;
+
+  // 切换到游戏 UI
+  lobbyDiv = document.getElementById('lobby');
+  gameUIDiv = document.getElementById('game-ui');
+  if (lobbyDiv) lobbyDiv.style.display = 'none';
+  if (gameUIDiv) gameUIDiv.style.display = 'block';
+
+  // 隐藏双人模式专属元素
+  hideEl('room-code-display');
+  hideEl('turn-indicator');
+  hideEl('progress-bars');
+  hideEl('turn-hint');
+
+  const timerEl = document.getElementById('timer');
+  if (timerEl) {
+    timerEl.style.display = '';
+    timerEl.innerText = '⏱ 0:00';
+  }
+  const mineEl = document.getElementById('mine-count');
+  if (mineEl) {
+    mineEl.style.display = '';
+    const flagCount = board.flat().filter(c => c.state === CellState.Flagged).length;
+    mineEl.innerText = `💣 ${totalMines - flagCount}`;
+    if (!(mineEl as any).__soloGodModeBound) {
+      (mineEl as any).__soloGodModeBound = true;
+      mineEl.addEventListener('click', () => {
+        if (isSoloActive) toggleSoloGodMode();
+      });
+    }
+  }
+
+  // 显示难度选择栏
+  const dfBar = document.getElementById('solo-difficulty-bar');
+  if (dfBar) dfBar.style.display = '';
+  // 显示旗子模式按钮
+  const flagBar = document.getElementById('flag-mode-bar');
+  if (flagBar) flagBar.style.display = '';
+  // 隐藏自定义面板
+  const custPanel = document.getElementById('custom-difficulty-panel');
+  if (custPanel) custPanel.style.display = 'none';
+
   updateDifficultyHighlight();
 
   drawBoardFromCells(board, 'game-canvas', soloCellSize);
@@ -425,6 +605,7 @@ export function goBackToLobby() {
   isSoloActive = false;
   soloBound = false;
   diffBound = false;
+  clearSoloSave(); // 退出单机时清除缓存
   // 重置旗子模式
   setFlagMode(false);
   // 隐藏难度栏、自定义面板、旗子模式按钮
@@ -450,3 +631,19 @@ function bindSoloCanvasEvents() {
     () => soloCellSize,
   );
 }
+
+// ---- 快捷键：Ctrl+Shift+G 切换上帝模式（仅单机模式激活时生效） ----
+let soloGodBound = false;
+function bindSoloGodKey() {
+  if (soloGodBound) return;
+  soloGodBound = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === 'G' || e.code === 'KeyG')) {
+      if (!isSoloActive) return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSoloGodMode();
+    }
+  });
+}
+bindSoloGodKey();

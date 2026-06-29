@@ -47,3 +47,30 @@ export async function joinRoom(roomId: string): Promise<{
   }
   return res.json();
 }
+
+export interface RoomStateResponse {
+  room_id: string;
+  board: number[][];
+  rows: number;
+  cols: number;
+  mines: number;
+  game_started: boolean;
+  current_turn: string | null;
+  player_count: number;
+  revealed_cells: [number, number][];
+}
+
+/** 获取房间完整状态（用于刷新恢复） */
+export async function getRoomState(roomId: string): Promise<RoomStateResponse> {
+  const res = await fetch(`${API_BASE}/room_state/${roomId}`);
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({ detail: '房间不存在或已过期' }));
+    throw new Error(errData.detail || '获取房间状态失败');
+  }
+  // 防御：确保响应是 JSON，避免 Vite 返回 HTML 时 res.json() 崩掉
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('房间不存在或已过期');
+  }
+  return res.json();
+}
